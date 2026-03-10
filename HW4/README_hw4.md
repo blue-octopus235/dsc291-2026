@@ -14,23 +14,15 @@ The notebook is designed to execute top-to-bottom and to be reproducible when ru
 Dependencies
 ------------
 
-The notebook expects the following Python packages:
-
-- `numpy`
-- `pandas`
-- `dask[dataframe]`
-- `pyarrow`
-- `s3fs`
-- `xgboost`
-- `scikit-learn`
-- `matplotlib`
-- `python-dotenv`
-  
-You can install them with:
+A `requirements.txt` for HW4 is included in this folder. The recommended setup is a dedicated virtual environment:
 
 ```bash
-pip install numpy pandas dask[DataFrame] pyarrow s3fs xgboost scikit-learn matplotlib python-dotenv
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r HW4/requirements.txt
 ```
+
+Packages required: `numpy`, `pandas`, `dask[dataframe]`, `pyarrow`, `s3fs`, `xgboost`, `scikit-learn`, `matplotlib`, `python-dotenv`.
 
 ---
 
