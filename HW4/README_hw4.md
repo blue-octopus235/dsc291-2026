@@ -159,12 +159,16 @@ Pipeline Overview
 
 The extra-credit section:
 
-- Adds metadata features from `date` and `pickup_place` (calendar features, lon/lat, zone id).
-- Reuses the same train/test split indices as the main Part B model.
-- Fits a new PCA (train-only) and XGBoost model with both PCs and metadata.
-- Evaluates performance, plots confusion matrix and feature importance for the augmented feature set.
-- Uses bootstrap resampling to report stability (accuracy & F1 confidence intervals).
-- Analyzes prediction confidence for correct vs incorrect predictions.
+- **Part A**:
+  - Performs a small hyperparameter study (tree depth, learning rate) for the raw-trip XGBoost model and reports accuracy + macro-F1.
+  - Uses bootstrap resampling on the Part A test set to quantify stability and prediction confidence (ensemble of bootstrap models), including summary statistics and histograms.
+- **Part B**:
+  - Adds metadata features from `date` and `pickup_place` (calendar features, lon/lat, zone id).
+  - Reuses the same train/test split indices as the main Part B model.
+  - Fits a new PCA (train-only) and XGBoost model with both PCs and metadata.
+  - Evaluates performance, plots confusion matrix and feature importance for the augmented feature set.
+  - Uses bootstrap resampling to report stability (accuracy & F1 confidence intervals).
+  - Analyzes prediction confidence for correct vs incorrect predictions.
 
 ---
 
