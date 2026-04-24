@@ -1,6 +1,6 @@
 # NYC Taxi Analytics & Machine Learning System
 
-> A end-to-end data science pipeline built on real-world NYC taxi data, spanning scalable ETL engineering, PCA-based representation learning, heavy-tail statistical analysis, and interpretable ML modeling with GAM and XGBoost.
+> An end-to-end data science pipeline built on real-world NYC taxi data, spanning scalable ETL engineering, PCA-based representation learning, heavy-tail statistical analysis, and interpretable ML modeling with GAM and XGBoost.
 
 
 ---
