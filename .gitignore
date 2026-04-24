@@ -67,3 +67,5 @@ htmlcov/
 
 # Word temp/lock files
 ~$*.docx
+
+01_scalable_taxi_data_pipeline/intermediates/

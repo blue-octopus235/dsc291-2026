@@ -1,289 +1,226 @@
-## Setup
+# NYC Taxi Analytics & Machine Learning System
 
-- **Requirements:** `pip install -r requirements.txt` (from repo root).
-- **Code location:** All pipeline code lives in `pivot_and_bootstrap/` as required.
-- **S3 location of the single Parquet (wide) table:** `s3://291-s3-bucket/wide.parquet` (configurable via `--s3-output` or env `DSC291_S3_OUTPUT`).
+> A end-to-end data science pipeline built on real-world NYC taxi data, spanning scalable ETL engineering, PCA-based representation learning, heavy-tail statistical analysis, and interpretable ML modeling with GAM and XGBoost.
+
 
 ---
 
-# Part 1: Core Utilities
+## Overview
 
+Urban mobility data is large, noisy, and heterogeneous. This project builds an end-to-end system to extract meaningful signal from it, from raw Parquet ingestion through PCA-based representation learning to interpretable fare prediction and taxi type classification.
 
-The module notes that Part 1 focuses on the core utilities (column detection, path inference, pivoting, and cleanup), which form the basis of the NYC TLC taxi data pivoting pipeline.
-
-`pivot_utils.py` is a utility module for pivoting **NYC TLC (Taxi and Limousine Commission) taxi data**. It supports data discovery, column detection, and reshaping of trip-level records into a time-series format suitable for analysis.
-
----
-
-## Core Utilities
-
-### Column Detection
-
-NYC TLC data uses different column names depending on the taxi type (yellow, green, FHV). These functions detect the correct columns in a DataFrame.
-
-| Function | Description |
-|----------|-------------|
-| `find_pickup_datetime_col(columns)` | Finds the pickup datetime column from a list of column names (e.g. `df.columns.tolist()`). Supports `tpep_pickup_datetime` (yellow), `lpep_pickup_datetime` (green), or `pickup_datetime` (generic). Matching is case-insensitive. Returns column name or `None`. |
-| `find_pickup_location_col(columns)` | Finds the pickup location column from a list of column names. Supports `PULocationID`, `pickup_location_id`, and similar variants. Falls back to dropoff location (`DOLocationID`) if pickup is not found. Returns column name or `None`. |
-
-### Path Inference
-
-Many NYC TLC files encode taxi type and month in the file path (e.g., `yellow_tripdata_2023-01.parquet`). These functions extract that metadata from the path.
-
-| Function | Description |
-|----------|-------------|
-| `infer_taxi_type_from_path(file_path)` | Extracts taxi type from the path. Supports `yellow`, `green`, `fhv`, and `fhvhv`. Returns lowercase string or `None` if not inferrable. |
-| `infer_month_from_path(file_path)` | Extracts year and month from the path. Supports `YYYY-MM` (e.g., `2023-01`), `year=YYYY/month=MM` (partitioned), and `YYYY_MM`. Returns `(year, month)` tuple or `None`. |
-
-### Pivoting
-
-| Function | Description |
-|----------|-------------|
-| `pivot_counts_date_taxi_type_location(df)` | Pivots trip-level records into counts by (date × taxi_type × pickup_place × hour). Input needs a pickup datetime column, pickup location column, and `taxi_type`. Output has a MultiIndex `(taxi_type, date, pickup_place)` and columns `hour_0` through `hour_23`. Missing hours are filled with 0. |
-
-### Cleanup
-
-| Function | Description |
-|----------|-------------|
-| `cleanup_low_count_rows(df, min_rides=50)` | Removes rows with fewer than `min_rides` total rides (sum across hour columns). Returns a tuple of `(cleaned_df, stats)` where `stats` includes `rows_before`, `rows_after`, and `rows_dropped`. |
+The system is organized into four self-contained phases, each building on the last.
 
 ---
 
-## Data Flow
+## Pipeline at a Glance
 
-A typical pipeline might use these utilities as follows:
-
-1. **Load data** — Read parquet files into a DataFrame.
-2. **Infer metadata** — Use `infer_taxi_type_from_path()` and `infer_month_from_path()` to get taxi type and month from each file path.
-3. **Detect columns** — Use `find_pickup_datetime_col()` and `find_pickup_location_col()` to find the correct columns, then add `taxi_type` to the DataFrame.
-4. **Pivot** — Call `pivot_counts_date_taxi_type_location()` to reshape trip records into hourly counts.
-5. **Clean up** — Call `cleanup_low_count_rows()` to remove low-count rows before further analysis.
-
----
-# Part 2: S3 & File Discovery
-
-## What Part 2 Asks For
-
-From the assignment:
-
-- **Path helpers**: `is_s3_path`, `get_storage_options`, `get_filesystem` — tell S3 from local paths, get storage config and a filesystem object (e.g. `s3fs` for S3, anonymous when needed).
-- **Discovery**: `discover_parquet_files(input_path)` — one function that recursively finds all `.parquet` files for a given path and returns a **sorted list**, whether the path is **local or S3**.
-
----
-
-## What This Code Does
-
-The code in `pivot_and_bootstrap/pivot_utils.py` implements that: it discovers parquet files from either the local filesystem or an S3 bucket using the same API.
-
-- **Path helpers**  
-  `is_s3_path` detects `s3://` or `s3a://`. `get_storage_options` returns options (e.g. `anon=True` for public S3). `get_filesystem` returns `s3fs.S3FileSystem` for S3 or the local filesystem for disk paths.
-
-- **Discovery**  
-  `discover_parquet_files(input_path)` walks the path recursively (local: `rglob`, S3: `fs.find`), keeps only `.parquet` paths, sorts them, and returns the list. Same call works for `/data/taxi/` or `s3://bucket/prefix/`.
+```
+Raw Taxi Data (Parquet)
+        │
+        ▼
+┌─────────────────────────┐
+│  Phase 1: Data Pipeline │  PyArrow · multiprocessing · partition optimization
+└────────────┬────────────┘
+             │
+             ▼
+┌────────────────────────────────────┐
+│  Wide Feature Table                │  (taxi_type, date, location) × hour_0…hour_23
+└────────────┬───────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────┐
+│  Phase 2: PCA + Statistical Analysis│  Representation learning · tail analysis · bootstrap
+└────────────┬────────────────────────┘
+             │
+        ┌────┴────┐
+        ▼         ▼
+┌──────────────┐  ┌────────────────────────────┐
+│ Phase 3: GAM │  │ Phase 4: XGBoost Classifier │
+│ Fare Predict │  │ Taxi Type Classification    │
+└──────────────┘  └────────────────────────────┘
+```
 
 ---
 
-## How It Is Used in the Pipeline
+## Phases
 
-Pipeline step 1 is **"Discover Parquet files (local dir or s3://...)"**. Part 2 is that step.
+### Phase 1 — Scalable Data Pipeline
 
-The main pipeline (e.g. Part 4's `pivot_all_files.py`) will:
+**`01_scalable_data_pipeline/`**
 
-1. Take an input path from the user (`--input-dir`), which may be local or S3.
-2. Call `discover_parquet_files(input_path)` once to get the full list of parquet files.
-3. Use that list for the rest of the pipeline: group by month, process each file (read → normalize → aggregate → pivot → cleanup), then combine into the final wide table.
+Builds a production-style ETL pipeline for large-scale taxi data.
 
-So Part 2 is the **file-discovery layer**: it hides whether data lives on disk or S3 and gives the rest of the pipeline a single, sorted list of parquet paths to process.
+**What it does:**
+- Processes Parquet data (local and S3-compatible)
+- Handles schema inconsistencies across files
+- Aggregates trip-level records into a wide feature table: `(taxi_type, date, pickup_location) × hour_0…hour_23`
+- Filters low-signal rows (< 50 rides) and merges into a single output table
+
+**Engineering highlights:**
+- Partition-based parallel processing with `multiprocessing`
+- Partition size optimization for memory efficiency
+- Runtime, memory, and data-loss tracking throughout
 
 ---
 
-## Quick Usage
+### Phase 2 — PCA, Tail Analysis & Stability
+
+**`02_pca_spatial_bootstrap_analysis/`**
+
+Extracts and validates latent temporal patterns in the ride distribution data.
+
+#### Representation Learning (PCA)
+- Applied to hourly ride distributions
+- Identifies dominant temporal patterns across the city
+- Outputs variance explained and a serialized PCA model (`models/pca_model.pkl`)
+- Spatial visualization of components mapped onto NYC taxi zones via Folium
+
+#### Statistical Analysis
+- Histogram and Q-Q plots of PCA coefficients
+- Log-log survival plots and Hill estimator for power-law tail exponents
+- **Key finding:** PCA coefficients exhibit heavy-tailed behavior, indicating bursty demand dynamics
+
+#### Bootstrap Stability
+- Resamples data to evaluate PCA robustness
+- Metrics: eigenvector stability, subspace similarity, and component consistency across resamples
+
+---
+
+### Phase 3 — Interpretable Fare Prediction (GAM)
+
+**`03_gam_fare_prediction/`**
+
+A **Generalized Additive Model** for predicting taxi fares with full interpretability.
+
+**Features used** (no fare-leakage variables):
+- Trip distance and duration
+- Hour of day and day of week
+- Passenger count
+
+**Model design:** Smooth spline terms for distance, duration, and time; linear terms for the rest.
+
+**Evaluation:** RMSE, MAE, R²
+
+**Interpretability outputs:** Partial dependence plots for distance → fare, duration → fare, and time-of-day effects.
+
+---
+
+### Phase 4 — Taxi Type Classification (XGBoost)
+
+**`04_xgboost_taxi_type_classification/`**
+
+Classifies trips as yellow or green taxi using two feature regimes.
+
+| Model | Features | Purpose |
+|-------|----------|---------|
+| **Model A** | Distance, duration, time, passenger count | Raw feature baseline |
+| **Model B** | PC1–PC5 from hourly ride distributions | Latent representation |
+
+**Evaluation:** Accuracy, precision/recall/F1, confusion matrix
+
+**Key comparison:** Raw feature space vs. PCA latent space — quantifies the value of learned representations for classification.
+
+---
+
+## Repository Structure
+
+```
+.
+├── 01_scalable_data_pipeline/
+├── 02_pca_spatial_bootstrap_analysis/
+├── 03_gam_fare_prediction/
+├── 04_xgboost_taxi_type_classification/
+│
+├── models/                  # Serialized model artifacts
+├── results/
+│   ├── figures/
+│   └── reports/
+│
+├── tests/
+├── docs/
+├── requirements.txt
+└── README.md
+```
+
+---
+
+## Tech Stack
+
+| Category | Libraries |
+|----------|-----------|
+| Data processing | Pandas, NumPy, PyArrow, Dask |
+| Machine learning | Scikit-learn, XGBoost, PyGAM / Statsmodels |
+| Visualization | Matplotlib, Seaborn, Folium |
+| Infrastructure | Python multiprocessing, Parquet (local + S3) |
+
+---
+
+## How to Run
+
+This project is modular — each phase is independent and can be run on its own.
+
+> ⚠️ Large datasets are not included in this repository. NYC TLC taxi data in Parquet format is required. Place data locally or update paths inside scripts/notebooks.
+
+### 1. Setup
 
 ```bash
-# Setup
+git clone <repo-url>
+cd dsc291-2026
 pip install -r requirements.txt
-
-# Run tests
-python3 -m pytest pivot_and_bootstrap/test_pivot_date_location_hour.py -v
 ```
 
-```python
-from pivot_and_bootstrap import discover_parquet_files
-
-# Local or S3 — same call
-files = discover_parquet_files('/data/taxi/')
-files = discover_parquet_files('s3://nyc-tlc/trip data/', anon=True)
-# → sorted list of .parquet paths
-```
-
-**Files**: `pivot_and_bootstrap/pivot_utils.py` (implementation), `pivot_and_bootstrap/test_pivot_date_location_hour.py` (tests).
-
----
-# Part 3 — `partition_optimization.py`
-## What Part 3 Asks For
-
-From the assignment:
-
-- **`parse_size(size_str)`** — parse human-readable size strings such as `"200MB"` or `"1.5GB"` into bytes.
-- **`find_optimal_partition_size(...)`** — test candidate partition sizes (50MB–1GB), measure runtime and memory usage using PyArrow batching, and select the best size that stays within a specified memory limit.
-- Support both **local files and S3 paths**.
-- Use partitioning/batching to improve performance while avoiding out-of-memory errors.
-
----
-
-## What This Code Does
-
-The code in `pivot_and_bootstrap/partition_optimization.py` implements a lightweight batch-size tuning step for reading large Parquet files with PyArrow.
-
-- **Size parsing**  
-  `parse_size(size_str)` converts strings like `"512KB"`, `"200MB"`, or `"1.5GB"` into byte counts. It is case-insensitive, allows optional whitespace, and validates units and values.
-
-- **Batch size benchmarking**  
-  `find_optimal_partition_size(...)` selects a representative Parquet file (local or `s3://`) and estimates an approximate bytes-per-row ratio from Parquet metadata. Using this estimate, it converts the assignment’s byte-range targets (default 50MB–1GB) into a small set of candidate **row-based batch sizes**.
-
-  Each candidate is tested by reading a few batches with `ParquetFile.iter_batches`, while measuring wall-clock time and peak resident memory usage (RSS). Candidates that exceed the configured memory limit are rejected, and among the remaining candidates the fastest option is selected. The final result is returned as an approximate batch size in bytes and logged for transparency.
-
----
-
-## How It Is Used in the Pipeline
-
-Partition optimization is an **optional performance step** that runs before large-scale Parquet processing.
-
-In the main pipeline (Part 4), the flow is:
-
-1. Discover all Parquet files (Part 2).
-2. Optionally call `find_optimal_partition_size(...)` on a sample file to determine an efficient batch size.
-3. Use the selected batch size when reading Parquet files during month-by-month processing.
-4. Skip this step entirely if the user passes `--skip-partition-optimization`.
-
-This allows the pipeline to scale to large datasets while keeping memory usage within bounds and improving overall throughput.
-
----
-
-## Quick Usage
-
-```python
-from pivot_and_bootstrap.partition_optimization import (
-    parse_size,
-    find_optimal_partition_size,
-)
-
-# Parse human-readable sizes
-parse_size("200MB")    # -> bytes
-parse_size("1.5GB")    # -> bytes
-
-# Find an optimal batch size for Parquet reads
-batch_bytes = find_optimal_partition_size(
-    parquet_paths="s3://nyc-tlc/trip-data/yellow_tripdata_2023-01.parquet",
-    max_memory_usage_mb=4096,
-)
-```
-**Files**: `pivot_and_bootstrap/partition_optimization.py` (implementation), `pivot_and_bootstrap/test_pivot_date_location_hour.py` (tests).
-
-
-# Part 4: Main Pipeline — `pivot_all_files.py`
-
-## What Part 4 Asks For
-
-From the assignment:
-
-- **`process_single_file`**: Read Parquet (local/S3) → infer expected month from path → normalize → aggregate by `(date, taxi_type, pickup_place, hour)` → pivot → **discard rows with < 50 rides** → write intermediate Parquet. **Count rows whose month ≠ file's expected month**; return this count (and any per-file stats) along with metadata.
-- **Month-at-a-time processing**: Group discovered files by `(year, month)`. Process **one month at a time** (e.g. all files for 2023-01, then 2023-02). Within a month, parallelize across files if desired.
-- **Month-mismatch reporting**: Aggregate and **report** the number of rows where the row's month does not match the Parquet file's expected month. Include at least a **total** across all files; optionally also per-file and/or per-month breakdown.
-- **`combine_into_wide_table`**: Read all intermediates → aggregate by `(taxi_type, date, pickup_place)`, sum hour columns → produce **a single wide table** indexed by **taxi_type, date, pickup_place** for **all available data** → **store as Parquet** (final output).
-- **Step 5 — Generate report**: Produce a **report** with: **input row count**, **output row count**, **bad rows ignored**, **memory use** (e.g. peak RSS), and **run time** (wall-clock). The report is written to **`performance.md`** (path configurable via `--report-output`), containing all required metrics per the assignment’s Performance Summary instructions.
-- **CLI `main()`**: `--input-dir`, `--output-dir`, `--min-rides` (default 50), `--workers`, `--parallel-files`, `--partition-size` / `--skip-partition-optimization`, `--keep-intermediate`, `--s3-output`, `--report-output`, `--max-memory-usage`, `--no-s3-anon`, `--max-months`, `-v`/`--verbose`. Run discovery → group by month → (optional) partition optimization → **process one month at a time** (or all files in one pool with `--parallel-files`) → **report month-mismatch counts** → **combine into single wide table** → **store as Parquet** → **upload to S3** → **generate report**. Use multiprocessing, tqdm, continue on per-file errors.
-
----
-
-## What This Code Does
-
-The script `pivot_and_bootstrap/pivot_all_files.py` implements the full pipeline:
-
-1. **Discover** — Uses Part 2's `discover_parquet_files()` to get a sorted list of Parquet files (local or S3).
-2. **Schema check** — Samples files and normalizes to a common schema (pickup datetime, pickup location).
-3. **Group by month** — Infers `(year, month)` from path (e.g. `yellow_tripdata_2023-01.parquet` → 2023-01).
-4. **Process** — For each file (or in parallel via `--workers` or `--parallel-files`): read → normalize → aggregate by `(date, taxi_type, pickup_place, hour)` → pivot → drop rows with < `--min-rides` (default 50) → write intermediate Parquet. Counts and reports month-mismatch rows.
-5. **Combine** — Reads all intermediates, aggregates by `(taxi_type, date, pickup_place)`, sums hour columns → one wide table.
-6. **Write & S3** — Saves `wide_table.parquet` under `--output-dir`, then uploads to S3 (default or `DSC291_S3_OUTPUT` / `--s3-output`).
-7. **Report** — Writes **`performance.md`** (path via `--report-output`, default: `<output-dir>/performance.md`) with input/output row counts, bad rows ignored, peak RSS, wall-clock run time, time breakdown, discard breakdown by reason, date consistency (month-mismatch) counts, row breakdown by year and taxi type, and schema summary, as required by the assignment.
-
-**S3 location of the single Parquet (wide) table:** `s3://291-s3-bucket/wide.parquet`
-
----
-
-## Quick Usage
+### 2. Phase 1 — Data Pipeline
 
 ```bash
-# From repo root — defaults: input s3://dsc291-ucsd/taxi, output ./pivot_and_bootstrap, upload to s3://291-s3-bucket/wide.parquet
-python pivot_and_bootstrap/pivot_all_files.py
-
-# With 3 workers
-python pivot_and_bootstrap/pivot_all_files.py --parallel-files 3
-
-# Override paths
-python pivot_and_bootstrap/pivot_all_files.py --input-dir /data/parquet --output-dir ./out --s3-output s3://my-bucket/wide.parquet
+cd 01_scalable_data_pipeline
+python pivot_all_files.py --input-dir <path_to_parquet> --output-dir <output_path>
 ```
 
-### CLI options (summary)
+Generates the wide feature table used in all downstream phases.
 
-| Option | Description |
-|--------|-------------|
-| `--input-dir` | Local directory or `s3://` path for Parquet files (default from code). |
-| `--output-dir` | Local directory for intermediates and final `wide_table.parquet` (default from code). |
-| `--min-rides` | Discard rows with fewer than this many total rides (default: 50). |
-| `--workers` | Number of parallel workers per month (default: min(4, CPU count)). |
-| `--parallel-files` | Process all files in one pool with N workers; overrides `--workers` for file processing. |
-| `--partition-size` | Optional partition size (e.g. `200MB`) for batched reads. |
-| `--skip-partition-optimization` | Do not run partition optimization. |
-| `--keep-intermediate` | Keep intermediate Parquet files after combining. |
-| `--s3-output` | S3 URI for final wide table (e.g. `s3://291-s3-bucket/wide.parquet`). Can set env `DSC291_S3_OUTPUT` instead. |
-| `--report-output` | Path for `performance.md` report (default: `<output-dir>/performance.md`). |
-| `--max-memory-usage` | Max memory for partition optimization (e.g. `4GB`). |
-| `--no-s3-anon` | Use AWS credentials for S3 (required for NYC TLC bucket). |
-| `--max-months` | Process only the first N months (e.g. `12` for a shorter run). |
-| `-v`, `--verbose` | Verbose logging. |
-
-**Files**: `pivot_and_bootstrap/pivot_all_files.py` (main pipeline), `pivot_and_bootstrap/pivot_utils.py` (Part 1 & 2), `pivot_and_bootstrap/partition_optimization.py` (optional). Run `python pivot_and_bootstrap/pivot_all_files.py --help` for full CLI options.
-
----
-
-## Part 5: Testing
-
-Tests are implemented in **`pivot_and_bootstrap/test_pivot_date_location_hour.py`** and cover the assignment’s Part 5 requirements: column detection variants, pivot output shape/values, error handling, month inference, cleanup of low-count rows, month-mismatch counting, and an integration test with sample Parquet data.
-
-### Test classes
-
-| Class | Coverage |
-|-------|----------|
-| **TestColumnDetection** | `find_pickup_datetime_col` / `find_pickup_location_col` for standard names (yellow/green/generic), case-insensitivity, missing columns; `infer_taxi_type_from_path` for yellow, green, FHV/FHVHV, unknown paths. |
-| **TestMonthInference** | `infer_month_from_path` for hyphenated (`2023-01`), partitioned (`year=2023/month=01`), underscore formats; paths with no date. |
-| **TestPivotFunction** | Pivot output index (`taxi_type`, `date`, `pickup_place`), presence of `hour_0`…`hour_23`, missing hours filled with 0, aggregation correctness, multiple dates/locations/taxi types. |
-| **TestCleanupLowCount** | `cleanup_low_count_rows(df, min_rides=50)` drops rows with total rides &lt; 50; returns cleaned DataFrame and stats. |
-| **TestErrorHandling** | Missing datetime/location columns (return `None`); null datetimes, invalid location IDs, empty DataFrame. |
-| **TestMonthMismatch** | Counting rows where pickup month ≠ file’s expected month; no-mismatch case. |
-| **TestIntegration** | End-to-end: sample Parquet → column detection → path inference → pivot → cleanup; verifies output structure and hour columns. |
-
-### Run tests
+### 3. Phase 2 — PCA & Analysis
 
 ```bash
-# From repo root
-python3 -m pytest pivot_and_bootstrap/test_pivot_date_location_hour.py -v
-
-# With short tracebacks
-python3 -m pytest pivot_and_bootstrap/test_pivot_date_location_hour.py -v --tb=short
+cd ../02_pca_spatial_bootstrap_analysis
+python pca_analysis.py
+python tail_analysis.py
+python bootstrap_stability.py
 ```
 
-**File**: `pivot_and_bootstrap/test_pivot_date_location_hour.py`.
+Outputs saved to `results/`.
+
+### 4. Phase 3 — GAM Fare Prediction
+
+```bash
+cd ../03_gam_fare_prediction
+jupyter notebook gam_fare_prediction.ipynb
+```
+
+### 5. Phase 4 — XGBoost Classification
+
+```bash
+cd ../04_xgboost_taxi_type_classification
+jupyter notebook xgboost_classification.ipynb
+```
+
+### 6. Tests (Optional)
+
+```bash
+pytest tests/
+```
 
 ---
 
-## Troubleshooting
+## Key Results
 
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| **S3 403 Forbidden** | NYC TLC (`s3://nyc-tlc/`) requires AWS credentials | Run `aws configure`, then use `--no-s3-anon` |
-| **ExpiredToken / NoCredentialsError** | Missing or invalid AWS credentials | Run `aws configure` or set `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` |
-| **Out of memory** | Large files read at once | Use `--partition-size 200MB` or `--max-memory-usage 4GB`; enable partition optimization |
-| **Slow runs** | Limited parallelism | Use `--parallel-files 3` or `--workers 3` |
-| **No Parquet files found** | Wrong path or permissions | Check `--input-dir`; for S3, verify bucket/prefix and credentials |
+| Phase | Highlight |
+|-------|-----------|
+| Phase 1 | Scalable pipeline processing millions of records with partition-level parallelism |
+| Phase 2 | Heavy-tailed PCA coefficient distributions; stable subspace across bootstrap resamples |
+| Phase 3 | Interpretable fare model with smooth partial dependence curves |
+| Phase 4 | PCA features competitive with raw features for taxi type classification |
+
+---
+
+> This project demonstrates a complete ML workflow: **data engineering → feature representation → statistical analysis → modeling → evaluation** — with a focus on scalability, interpretability, and robustness.
